@@ -1,7 +1,6 @@
 import requests
 import time
 import threading
-import time
 import sys
 import re
 from pprint import pprint
@@ -9,6 +8,8 @@ from pprint import pprint
 
 bot_token = ""
 bot_api_base_url = "https://api.telegram.org/bot{}".format(bot_token)
+
+print_lock = threading.Lock()
 
 
 class bcolors():
@@ -32,24 +33,17 @@ class rotating_loading():
         duration = 0.2
         while not self.stop_event.is_set():
             for symbol in symbols:
-                print('\r' + symbol, end='', flush=True)
+                if self.stop_event.is_set():
+                    break
+                with print_lock:
+                    print('\r' + symbol, end='', flush=True)
                 time.sleep(duration)
 
-        print("\r", end='')
+        with print_lock:
+            print("\r", end='')
 
-def handle_edited_message(message):
-    pass
-
-def handle_message(message):
-    # is a + b regex
-    if re.match(r"^\d+\s*\+\s*\d+$", message["message"]["text"]):
-        a, b = map(int, re.findall(r"\d+", message["message"]["text"]))
-        bot.send_message(message["message"]["chat"]["id"], a + b)
-    pass
-
-
-class Bot():
-    def log(self, message):
+def log(message):
+    with print_lock:
         print(
             f"{bcolors.OKGREEN}[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}]{bcolors.ENDC}", end="")
         if isinstance(message, str):
@@ -58,6 +52,20 @@ class Bot():
             print()
             pprint(message)
 
+def handle_edited_message(bot, message):
+    pass
+
+def handle_message(bot, message):
+    text = message["message"].get("text")
+    if not text:
+        return
+    # is a + b regex
+    if re.match(r"^\d+\s*\+\s*\d+$", text):
+        a, b = map(int, re.findall(r"\d+", text))
+        bot.send_message(message["message"]["chat"]["id"], a + b)
+
+
+class Bot():
     def __init__(self, debug: bool = False):
         self.update_id = 0
         self.debug = debug
@@ -67,23 +75,27 @@ class Bot():
             "offset": self.update_id + 1,
             "timeout": 30
         }
+        stop_event = threading.Event()
+        loading = threading.Thread(target=rotating_loading(stop_event).start)
+        loading.start()
         try:
-            stop_event = threading.Event()
-            loading = threading.Thread(target=rotating_loading(stop_event).start)
-            loading.start()
             response = requests.get(bot_api_base_url + "/getUpdates", data=params, timeout=params["timeout"] + 1)
             stop_event.set()
             loading.join()
 
             if response.status_code != 200:
-                self.log(f"Error: {response.status_code}")
+                log(f"Error: {response.status_code}")
                 return {"result": []}
         except KeyboardInterrupt:
-            self.log("Exiting...")
+            stop_event.set()
+            loading.join()
+            log("Exiting...")
             exit()
         except Exception as e:
-            self.log(e)
-            self.log("Timeout or Connection Error")
+            stop_event.set()
+            loading.join()
+            log(e)
+            log("Timeout or Connection Error")
             return {"result": []}
         return response.json()
 
@@ -92,10 +104,14 @@ class Bot():
             "chat_id": chat_id,
             "text": text
         }
-        response = requests.post(bot_api_base_url + "/sendMessage", data=data)
-        return response.json()
+        try:
+            response = requests.post(bot_api_base_url + "/sendMessage", data=data)
+            return response.json()
+        except Exception as e:
+            log(f"Failed to send message: {e}")
+            return None
 
-    def main(self, ):
+    def main(self):
         updates = self.get_updates()
         edited_message = list(
             filter(lambda x: "edited_message" in x, updates["result"]))
@@ -106,31 +122,28 @@ class Bot():
 
         for message in edited_message:
             self.update_id = message["update_id"]
-            self.log(message)
+            handle_edited_message(self, message)
+            log(message)
 
         for message in messages:
-            # self.log(message)
-
             self.update_id = message["update_id"]
 
             chat_id = message["message"]["chat"]["id"]
-            first_name = message["message"]["chat"]["first_name"] if "first_name" in message["message"]["chat"] else ""
-            last_name = message["message"]["chat"]["last_name"] if "last_name" in message["message"]["chat"] else ""
-            username = message["message"]["chat"]["username"] if "username" in message["message"]["chat"] else ""
+            first_name = message["message"]["chat"].get("first_name", "")
+            last_name = message["message"]["chat"].get("last_name", "")
+            username = message["message"]["chat"].get("username", "")
 
-            text = message["message"]["text"] if "text" in message["message"] else None
+            text = message["message"].get("text")
 
             fmt = f"{bcolors.OKBLUE}[{chat_id}]{bcolors.ENDC} {first_name} {last_name} (@{username}):"
             if text:
-                hd = threading.Thread(target=handle_message, args=(message,))
+                hd = threading.Thread(target=handle_message, args=(self, message))
                 hd.start()
-                self.log(f"{fmt} {text}")
+                log(f"{fmt} {text}")
             else:
                 obj = {k: v for k, v in message['message'].items() if k not in [
                     'chat', 'date', 'from', 'message_id']}
-                self.log(f"{fmt} {obj}")
-
-        # self.log(messages)
+                log(f"{fmt} {obj}")
 
     def start(self):
         while True:
@@ -138,16 +151,16 @@ class Bot():
 
 
 if __name__ == "__main__":
-    bot = Bot()
-
     debug = False
     if len(sys.argv) > 1 and sys.argv[1] == "debug":
-        bot.log("Debug mode")
         debug = True
-        
+
+    bot = Bot(debug)
+
+    if debug:
+        log("Debug mode")
 
     try:
-        th = Bot(debug)
-        th.start()
+        bot.start()
     except KeyboardInterrupt:
-        bot.log("Exiting...")
+        log("Exiting...")
