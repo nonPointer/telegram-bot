@@ -42,6 +42,16 @@ class rotating_loading():
         with print_lock:
             print("\r", end='')
 
+def log(message):
+    with print_lock:
+        print(
+            f"{bcolors.OKGREEN}[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}]{bcolors.ENDC}", end="")
+        if isinstance(message, str):
+            print(" " + message)
+        else:
+            print()
+            pprint(message)
+
 def handle_edited_message(bot, message):
     pass
 
@@ -56,16 +66,6 @@ def handle_message(bot, message):
 
 
 class Bot():
-    def log(self, message):
-        with print_lock:
-            print(
-                f"{bcolors.OKGREEN}[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}]{bcolors.ENDC}", end="")
-            if isinstance(message, str):
-                print(" " + message)
-            else:
-                print()
-                pprint(message)
-
     def __init__(self, debug: bool = False):
         self.update_id = 0
         self.debug = debug
@@ -84,18 +84,18 @@ class Bot():
             loading.join()
 
             if response.status_code != 200:
-                self.log(f"Error: {response.status_code}")
+                log(f"Error: {response.status_code}")
                 return {"result": []}
         except KeyboardInterrupt:
             stop_event.set()
             loading.join()
-            self.log("Exiting...")
+            log("Exiting...")
             exit()
         except Exception as e:
             stop_event.set()
             loading.join()
-            self.log(e)
-            self.log("Timeout or Connection Error")
+            log(e)
+            log("Timeout or Connection Error")
             return {"result": []}
         return response.json()
 
@@ -108,7 +108,7 @@ class Bot():
             response = requests.post(bot_api_base_url + "/sendMessage", data=data)
             return response.json()
         except Exception as e:
-            self.log(f"Failed to send message: {e}")
+            log(f"Failed to send message: {e}")
             return None
 
     def main(self):
@@ -123,7 +123,7 @@ class Bot():
         for message in edited_message:
             self.update_id = message["update_id"]
             handle_edited_message(self, message)
-            self.log(message)
+            log(message)
 
         for message in messages:
             self.update_id = message["update_id"]
@@ -139,11 +139,11 @@ class Bot():
             if text:
                 hd = threading.Thread(target=handle_message, args=(self, message))
                 hd.start()
-                self.log(f"{fmt} {text}")
+                log(f"{fmt} {text}")
             else:
                 obj = {k: v for k, v in message['message'].items() if k not in [
                     'chat', 'date', 'from', 'message_id']}
-                self.log(f"{fmt} {obj}")
+                log(f"{fmt} {obj}")
 
     def start(self):
         while True:
@@ -158,9 +158,9 @@ if __name__ == "__main__":
     bot = Bot(debug)
 
     if debug:
-        bot.log("Debug mode")
+        log("Debug mode")
 
     try:
         bot.start()
     except KeyboardInterrupt:
-        bot.log("Exiting...")
+        log("Exiting...")
